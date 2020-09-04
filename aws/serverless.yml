@@ -1,0 +1,162 @@
+service: aws
+# app and org for use with dashboard.serverless.com
+#app: your-app-name
+#org: your-org-name
+
+provider:
+  name: aws
+  runtime: nodejs12.x
+  profile: dev
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - dynamodb:PutItem
+      Resource: "*"
+    - Effect: Allow
+      Action:
+        - logs:CreateLogGroup
+        - "logs:CreateLogStream"
+        - "logs:PutLogEvents"
+      Resource: "*"
+  logs:
+    httpApi: true
+package:
+  individually: true
+custom:
+  # Configures throttling settings for all http endpoints
+  apiGatewayThrottling:
+    maxRequestsPerSecond: 100
+    maxConcurrentRequests: 100
+
+functions:
+  createThingAndCredentials:
+    handler: handler.createThingAndCredentials
+    role: createThingAndCredentialsRole 
+    package:
+      include:
+        - node_modules/
+        - createThingAndCredentials/
+    runtime: nodejs12.x # optional overwrite, default is provider runtime
+    memorySize: 512 # optional, in MB, default is 1024
+    timeout: 30 # optional, in seconds, default is 6
+    events:
+      - http: 
+          path: createThingAndCredentials
+          method: post
+          integration: lambda
+          authorizer: aws_iam
+          cors: true
+  associateDeviceToUser:
+    handler: associateHandler.associateDeviceToUser
+    role: associateDeviceToUserRole    
+    package:
+      include:
+        - node_modules/
+        - associateDeviceToUser/
+    runtime: nodejs12.x # optional overwrite, default is provider runtime
+    memorySize: 512 # optional, in MB, default is 1024
+    timeout: 30 # optional, in seconds, default is 6   
+    events:
+      - cloudwatchEvent:
+          event:
+            source:
+              - 'aws.iot'
+            detail-type:
+              - 'AWS API Call via CloudTrail'
+            detail:
+              eventName:
+                - CreateThing    
+    
+
+resources:
+  Resources:
+    auth0ApiRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: auth0ApiRole
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                  - apigateway.amazonaws.com
+              Action: sts:AssumeRole
+            - Effect: Allow
+              Principal:
+                Federated:
+                  - arn:aws:iam::012345670:saml-provider/auth0-api
+              Action: sts:AssumeRoleWithSAML
+              Condition:
+                StringEquals:
+                  SAML:iss: ${file(config.yml):SAMLUrn}
+              
+        Policies:
+          - PolicyName: auth0ApiGatewayPolicy
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: "Allow"
+                  Action:
+                    - execute-api:*
+                  Resource:
+                    - "*"
+    createThingAndCredentialsRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: createThingAndCredentialsRole
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                  - lambda.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/AWSIoTFullAccess
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+    associateDeviceToUserRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: associateDeviceToUserRole
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                  - lambda.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        Policies:
+          - PolicyName: associateDeviceToUserPolicy
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: "Allow"
+                  Action:
+                    - dynamodb:DeleteItem
+                    - dynamodb:GetItem
+                    - dynamodb:PutItem
+                    - dynamodb:UpdateItem
+                  Resource:
+                    - "*"
+    devicesTable:
+      Type: 'AWS::DynamoDB::Table'
+      Properties:
+        AttributeDefinitions:
+          -
+            AttributeName: "device_id"
+            AttributeType: "S"    
+        KeySchema:
+          -
+            AttributeName: "device_id"
+            KeyType: "HASH"
+        ProvisionedThroughput:
+          ReadCapacityUnits: 5
+          WriteCapacityUnits: 5
+        TableName: devices
+plugins:
+  - serverless-attach-managed-policy
