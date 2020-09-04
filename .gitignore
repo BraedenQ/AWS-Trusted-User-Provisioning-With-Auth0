@@ -2,7 +2,8 @@
 .DS_Store
 mobile-app/node_modules/
 local-api/node_modules/
-
+package-lock*
+aws/.serverless
 # Logs
 logs
 *.log
